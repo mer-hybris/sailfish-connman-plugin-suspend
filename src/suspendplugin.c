@@ -230,7 +230,7 @@ suspend_handle_display_on_off_iface(
     const char *ifname,
     int on_off)
 {
-    struct nl_msg *msg;
+    struct nl_msg *msg = NULL;
 
     int ifindex = 0;
 
@@ -248,6 +248,7 @@ suspend_handle_display_on_off_iface(
     genlmsg_put(msg, 0, 0, driver_id, 0, 0, NL80211_CMD_TESTMODE, 0);
 
     struct testmode_cmd_suspend susp_cmd;
+    memset(&susp_cmd, 0, sizeof susp_cmd);
     susp_cmd.header.idx = TESTMODE_CMD_ID_SUSPEND;
     susp_cmd.header.buflen = 0; // unused
     susp_cmd.suspend = (int)(on_off) ? 0 : 1;
@@ -256,7 +257,7 @@ suspend_handle_display_on_off_iface(
     nla_put(
         msg,
         NL80211_ATTR_TESTDATA,
-        sizeof(struct testmode_cmd_suspend),
+        sizeof susp_cmd,
         (void*)&susp_cmd);
 
     if (nl_send_auto(nl_socket, msg) < 0) {
