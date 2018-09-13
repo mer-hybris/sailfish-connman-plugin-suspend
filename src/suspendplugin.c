@@ -65,11 +65,11 @@ struct multicast_group {
     int id;
 };
 
-static MceDisplay* mce_display;
+static MceDisplay* mce_display = NULL;
 static gulong mce_display_event_ids[DISPLAY_EVENT_COUNT];
 static gboolean display_was_off = TRUE;
 
-static struct nl_sock *nl_socket;
+static struct nl_sock *nl_socket = NULL;
 static int driver_id = -1;
 
 static gboolean wowlan_wlan0_enabled = FALSE;
@@ -84,6 +84,7 @@ handle_nl_command_valid(
 {
     int *ret = arg;
     *ret = 0;
+    DBG("%d", *ret);
     return NL_SKIP;
 }
 
@@ -96,7 +97,8 @@ handle_nl_command_error(
 {
     int *ret = arg;
     *ret = err->error;
-    return NL_STOP;
+    connman_error("%s: error: %d", __func__, *ret);
+    return NL_SKIP;
 }
 
 static
@@ -107,6 +109,7 @@ handle_nl_command_finished(
 {
     int *ret = arg;
     *ret = 0;
+    DBG("%d", *ret);
     return NL_SKIP;
 }
 
@@ -118,44 +121,63 @@ handle_nl_command_ack(
 {
     int *ret = arg;
     *ret = 0;
+    DBG("%d", *ret);
     return NL_STOP;
 }
 
 static
 int
-handle_nl_command_family(
+handle_nl_seq_check(
     struct nl_msg *msg,
     void *arg)
 {
-    struct multicast_group *grp = arg;
-    struct nlattr *tb[CTRL_ATTR_MAX + 1];
-    struct genlmsghdr *gnlh = nlmsg_data(nlmsg_hdr(msg));
-    struct nlattr *mcgrp;
-    int rem_mcgrp;
+    DBG("");
 
-    nla_parse(tb, CTRL_ATTR_MAX, genlmsg_attrdata(gnlh, 0), genlmsg_attrlen(gnlh, 0), NULL);
+    return NL_OK;
+}
 
-    if (!tb[CTRL_ATTR_MCAST_GROUPS]) return NL_SKIP;
+static
+void
+suspend_plugin_netlink_handler()
+{
+    struct nl_cb *cb;
+    int res = 0;
+    int err = 0;
 
-    nla_for_each_nested(mcgrp, tb[CTRL_ATTR_MCAST_GROUPS], rem_mcgrp) {
-        struct nlattr *tb_mcgrp[CTRL_ATTR_MCAST_GRP_MAX + 1];
-
-        nla_parse(tb_mcgrp, CTRL_ATTR_MCAST_GRP_MAX, nla_data(mcgrp), nla_len(mcgrp), NULL);
-
-        if (!tb_mcgrp[CTRL_ATTR_MCAST_GRP_NAME] || !tb_mcgrp[CTRL_ATTR_MCAST_GRP_ID]) {
-            continue;
-        }
-
-        if (strncmp(nla_data(tb_mcgrp[CTRL_ATTR_MCAST_GRP_NAME]), grp->group,
-                nla_len(tb_mcgrp[CTRL_ATTR_MCAST_GRP_NAME]))) {
-            continue;
-        }
-
-        grp->id = nla_get_u32(tb_mcgrp[CTRL_ATTR_MCAST_GRP_ID]);
-        break;
+    cb = nl_cb_alloc(NL_CB_VERBOSE);
+    if (!cb) {
+        connman_error("%s: failed to allocate netlink callbacks", __func__);
+        return;
     }
 
-    return NL_SKIP;
+    err = 1;
+    nl_cb_err(cb, NL_CB_CUSTOM, handle_nl_command_error, &err);
+    nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, handle_nl_command_valid, &err);
+    nl_cb_set(cb, NL_CB_FINISH, NL_CB_CUSTOM, handle_nl_command_finished, &err);
+    nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, handle_nl_command_ack, &err);
+    nl_cb_set(cb, NL_CB_SEQ_CHECK, NL_CB_CUSTOM, handle_nl_seq_check, &err);
+
+    while (err == 1) {
+        DBG("waiting until nl testmode command has been processed\n");
+        res = nl_recvmsgs(nl_socket, cb);
+        if (res < 0) {
+            connman_error("nl_recvmsgs failed - wmtWifi %s:%d\n", __func__, res);
+            break;
+        }
+    }
+
+    if (err != 0 && err != 1) {
+        // the driver returned an error or doesn't support this command
+        // FIXME: if command is not supported, it could still be a gen3
+        // driver which uses "SETSUSPENDMODE 1/0" priv cmds
+        connman_error("%s: a callback has returned an error: %d\n", __func__, err);
+    }
+
+    if (err == 0) {
+        DBG("suspend on/off successfully done");
+    }
+
+    nl_cb_put(cb);
 }
 
 static
@@ -165,7 +187,6 @@ suspend_set_wowlan(
 {
     int err = 0;
     struct nl_msg *msg;
-    struct nl_cb *cb;
 
     struct nlattr *wowlan_triggers;
 
@@ -181,7 +202,6 @@ suspend_set_wowlan(
     DBG("iface %s, setting wowlan.", ifname);
 
     msg = nlmsg_alloc();
-    cb = nl_cb_alloc(NL_CB_DEFAULT);
 
     genlmsg_put(msg, 0, 0, driver_id, 0, 0, NL80211_CMD_SET_WOWLAN, 0);
 
@@ -194,24 +214,13 @@ suspend_set_wowlan(
 
     nla_nest_end(msg, wowlan_triggers);
 
-    err = 1;
-    nl_cb_err(cb, NL_CB_CUSTOM, handle_nl_command_error, &err);
-    nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, handle_nl_command_valid, &err);
-    nl_cb_set(cb, NL_CB_FINISH, NL_CB_CUSTOM, handle_nl_command_finished, &err);
-    nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, handle_nl_command_ack, &err);
-
-    if (nl_send_auto_complete(nl_socket, msg) < 0) {
+    if (nl_send_auto(nl_socket, msg) < 0) {
         connman_error("Failed to send wowlan command.\n");
-    }
-
-    while (err > 0) {
-        DBG("Waiting until wowlan command has been finalized.\n");
-        nl_recvmsgs(nl_socket, cb);
+    } else {
+        suspend_plugin_netlink_handler();
     }
 
     nlmsg_free(msg);
-    nl_cb_put(cb);
-
     return err;
 }
 
@@ -221,9 +230,7 @@ suspend_handle_display_on_off_iface(
     const char *ifname,
     int on_off)
 {
-    int err = 0;
-    struct nl_msg *msg;
-    struct nl_cb *cb;
+    struct nl_msg *msg = NULL;
 
     int ifindex = 0;
 
@@ -237,11 +244,11 @@ suspend_handle_display_on_off_iface(
     DBG("iface: %s suspend: %d\n", ifname, (int)on_off ? 0 : 1);
 
     msg = nlmsg_alloc();
-    cb = nl_cb_alloc(NL_CB_DEFAULT);
 
     genlmsg_put(msg, 0, 0, driver_id, 0, 0, NL80211_CMD_TESTMODE, 0);
 
     struct testmode_cmd_suspend susp_cmd;
+    memset(&susp_cmd, 0, sizeof susp_cmd);
     susp_cmd.header.idx = TESTMODE_CMD_ID_SUSPEND;
     susp_cmd.header.buflen = 0; // unused
     susp_cmd.suspend = (int)(on_off) ? 0 : 1;
@@ -250,26 +257,16 @@ suspend_handle_display_on_off_iface(
     nla_put(
         msg,
         NL80211_ATTR_TESTDATA,
-        sizeof(struct testmode_cmd_suspend),
+        sizeof susp_cmd,
         (void*)&susp_cmd);
 
-    err = 1;
-    nl_cb_err(cb, NL_CB_CUSTOM, handle_nl_command_error, &err);
-    nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, handle_nl_command_valid, &err);
-    nl_cb_set(cb, NL_CB_FINISH, NL_CB_CUSTOM, handle_nl_command_finished, &err);
-    nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, handle_nl_command_ack, &err);
-
-    if (nl_send_auto_complete(nl_socket, msg) < 0) {
+    if (nl_send_auto(nl_socket, msg) < 0) {
         connman_error("Failed to send testmode command.\n");
-    }
-
-    while (err > 0) {
-        DBG("Waiting until testmode command has been finalized.\n");
-        nl_recvmsgs(nl_socket, cb);
+    } else {
+        suspend_plugin_netlink_handler();
     }
 
     nlmsg_free(msg);
-    nl_cb_put(cb);
 }
 
 static
@@ -338,74 +335,9 @@ suspend_display_event(
 
 static
 int
-nl_get_multicast_id(
-    struct nl_sock *sock,
-    const char *family,
-    const char *group)
-{
-    struct nl_msg *msg;
-    struct nl_cb *cb;
-    int err, ctrlid;
-    struct multicast_group grp = { .group = group, .id = -ENOENT, };
-
-    msg = nlmsg_alloc();
-    if (!msg) {
-        return -1;
-    }
-
-    cb = nl_cb_alloc(NL_CB_DEFAULT);
-    if (!cb) {
-        nlmsg_free(msg);
-        return -1;
-    }
-
-    ctrlid = genl_ctrl_resolve(sock, "nlctrl");
-
-    genlmsg_put(msg, 0, 0, ctrlid, 0, 0, CTRL_CMD_GETFAMILY, 0);
-
-    nla_put_string(msg, CTRL_ATTR_FAMILY_NAME, family);
-
-    err = nl_send_auto_complete(sock, msg);
-    if (err < 0) {
-        nl_cb_put(cb);
-        nlmsg_free(msg);
-        return -1;
-    }
-
-    err = 1;
-
-    nl_cb_err(cb, NL_CB_CUSTOM, handle_nl_command_error, &err);
-    nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, handle_nl_command_ack, &err);
-    nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, handle_nl_command_family, &grp);
-
-    while (err > 0) {
-        nl_recvmsgs(sock, cb);
-    }
-
-    if (err == 0) {
-        err = grp.id;
-    }
-
-    nl_cb_put(cb);
-    nlmsg_free(msg);
-
-    return err;
-}
-
-static
-int
 suspend_plugin_init()
 {
-    int ret = 0;
-
     connman_info("Initializing suspend plugin.");
-    mce_display = mce_display_new();
-    mce_display_event_ids[DISPLAY_EVENT_VALID] =
-        mce_display_add_valid_changed_handler(mce_display,
-            suspend_display_event, NULL);
-    mce_display_event_ids[DISPLAY_EVENT_STATE] =
-        mce_display_add_state_changed_handler(mce_display,
-            suspend_display_event, NULL);
 
     nl_socket = nl_socket_alloc();
 
@@ -413,13 +345,13 @@ suspend_plugin_init()
 
     driver_id = genl_ctrl_resolve(nl_socket, "nl80211");
 
-    ret = nl_get_multicast_id(nl_socket, "nl80211", "testmode");
-    if (ret >= 0) {
-        ret = nl_socket_add_membership(nl_socket, ret);
-    } else {
-        connman_error("Failed to register for testmode multicast group.\n");
-        return -1;
-    }
+    mce_display = mce_display_new();
+    mce_display_event_ids[DISPLAY_EVENT_VALID] =
+        mce_display_add_valid_changed_handler(mce_display,
+            suspend_display_event, NULL);
+    mce_display_event_ids[DISPLAY_EVENT_STATE] =
+        mce_display_add_state_changed_handler(mce_display,
+            suspend_display_event, NULL);
 
     /* Handle the initial state */
     if (mce_display->valid) {
@@ -441,9 +373,13 @@ void
 suspend_plugin_exit()
 {
     DBG("");
+
     mce_display_remove_all_handlers(mce_display, mce_display_event_ids);
     mce_display_unref(mce_display);
     mce_display = NULL;
+
+    nl_socket_free(nl_socket);
+    nl_socket = NULL;
 }
 
 CONNMAN_PLUGIN_DEFINE(suspend, "Suspend plugin for devices with wmtWifi gen2.",
