@@ -209,7 +209,6 @@ suspend_set_wowlan(
 
     wowlan_triggers = nla_nest_start(msg, NL80211_ATTR_WOWLAN_TRIGGERS);
 
-    nla_put_flag(msg, NL80211_WOWLAN_TRIG_ANY);
     nla_put_flag(msg, NL80211_WOWLAN_TRIG_DISCONNECT);
 
     nla_nest_end(msg, wowlan_triggers);
