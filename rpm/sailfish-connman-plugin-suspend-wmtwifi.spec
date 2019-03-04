@@ -6,6 +6,7 @@ Group: Development/Libraries
 License: GPLv2
 URL: https://github.com/mer-hybris/sailfish-connman-plugin-suspend-wmtwifi
 Source: %{name}-%{version}.tar.bz2
+Source1: 70-wifi-powersave-rules.ini
 Requires: connman
 BuildRequires: pkgconfig(libmce-glib) >= 1.0.5
 BuildRequires: pkgconfig(connman)
@@ -26,10 +27,12 @@ make %{_smp_mflags} KEEP_SYMBOLS=1 release
 
 %install
 rm -rf %{buildroot}
-%make_install
-
 mkdir -p %{buildroot}/%{plugin_dir}
+%make_install
+mkdir -p %{buildroot}/etc/udev/rules.d
+install -m 664 %{SOURCE1} %{buildroot}/etc/udev/rules.d/70-wifi-powersave.rules
 
 %files
 %defattr(-,root,root,-)
 %{plugin_dir}/*.so
+%{_sysconfdir}/udev/rules.d/70-wifi-powersave.rules
