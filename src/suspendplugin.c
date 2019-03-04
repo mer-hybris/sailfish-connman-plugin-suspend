@@ -33,6 +33,10 @@
 
 #include <errno.h>
 
+#include <unistd.h>
+
+#include <sys/ioctl.h>
+
 #define QUOTE(x) #x
 #define STRINGIFY(x) QUOTE(x)
 
@@ -43,6 +47,13 @@
                             } while(false)
 
 #define TESTMODE_CMD_ID_SUSPEND 101
+
+#define PRIV_CMD_SIZE 512
+typedef struct android_wifi_priv_cmd {
+    char buf[PRIV_CMD_SIZE];
+    int used_len;
+    int total_len;
+} android_wifi_priv_cmd;
 
 enum mce_display_events {
     DISPLAY_EVENT_VALID,
@@ -168,9 +179,8 @@ suspend_plugin_netlink_handler()
 
     if (err != 0 && err != 1) {
         // the driver returned an error or doesn't support this command
-        // FIXME: if command is not supported, it could still be a gen3
-        // driver which uses "SETSUSPENDMODE 1/0" priv cmds
-        connman_error("%s: a callback has returned an error: %d\n", __func__, err);
+        // could be a driver which uses "SETSUSPENDMODE 1/0" priv cmds
+        connman_warn("%s: a callback has returned an error (might be ok if the SETSUSPENDMODE cmd works): %d\n", __func__, err);
     }
 
     if (err == 0) {
@@ -266,6 +276,40 @@ suspend_handle_display_on_off_iface(
     }
 
     nlmsg_free(msg);
+
+    char cmd[512];
+    int cmd_len = 0;
+    struct ifreq ifr;
+    android_wifi_priv_cmd priv_cmd;
+
+    int ret;
+    int ioctl_sock;
+
+    ioctl_sock = socket(PF_INET, SOCK_DGRAM, 0);
+
+    snprintf(cmd, 512, "SETSUSPENDMODE %d", on_off);
+    cmd_len = strlen(cmd);
+
+    memset(&ifr, 0, sizeof(ifr));
+    memset(&priv_cmd, 0, sizeof(priv_cmd));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
+
+    if (cmd_len > PRIV_CMD_SIZE) {
+        cmd_len = PRIV_CMD_SIZE - 1;
+    }
+
+    memcpy(priv_cmd.buf, cmd, cmd_len + 1);
+    priv_cmd.used_len = cmd_len + 1;
+    priv_cmd.total_len = PRIV_CMD_SIZE;
+    ifr.ifr_data = (void*)&priv_cmd;
+
+    ret = ioctl(ioctl_sock, SIOCDEVPRIVATE + 1, &ifr);
+
+    if (ret != 0) {
+        connman_warn("%s: SETSUSPENDMODE private command failed: %d (might not be supported by this driver, ignore if the testmode cmd succeeded)", __func__, ret);
+    }
+
+    close(ioctl_sock);
 }
 
 static
@@ -381,7 +425,7 @@ suspend_plugin_exit()
     nl_socket = NULL;
 }
 
-CONNMAN_PLUGIN_DEFINE(suspend, "Suspend plugin for devices with wmtWifi gen2.",
+CONNMAN_PLUGIN_DEFINE(suspend, "Suspend plugin for devices with wmtWifi gen2/gen3.",
     CONNMAN_VERSION, CONNMAN_PLUGIN_PRIORITY_DEFAULT, suspend_plugin_init,
     suspend_plugin_exit)
 
