@@ -33,6 +33,10 @@
 
 #include <errno.h>
 
+#include <unistd.h>
+
+#include <sys/ioctl.h>
+
 #define QUOTE(x) #x
 #define STRINGIFY(x) QUOTE(x)
 
@@ -43,6 +47,13 @@
                             } while(false)
 
 #define TESTMODE_CMD_ID_SUSPEND 101
+
+#define PRIV_CMD_SIZE 512
+typedef struct android_wifi_priv_cmd {
+    char buf[PRIV_CMD_SIZE];
+    int used_len;
+    int total_len;
+} android_wifi_priv_cmd;
 
 enum mce_display_events {
     DISPLAY_EVENT_VALID,
@@ -137,7 +148,7 @@ handle_nl_seq_check(
 }
 
 static
-void
+int
 suspend_plugin_netlink_handler()
 {
     struct nl_cb *cb;
@@ -147,7 +158,7 @@ suspend_plugin_netlink_handler()
     cb = nl_cb_alloc(NL_CB_VERBOSE);
     if (!cb) {
         connman_error("%s: failed to allocate netlink callbacks", __func__);
-        return;
+        return 1;
     }
 
     err = 1;
@@ -166,18 +177,13 @@ suspend_plugin_netlink_handler()
         }
     }
 
-    if (err != 0 && err != 1) {
-        // the driver returned an error or doesn't support this command
-        // FIXME: if command is not supported, it could still be a gen3
-        // driver which uses "SETSUSPENDMODE 1/0" priv cmds
-        connman_error("%s: a callback has returned an error: %d\n", __func__, err);
-    }
-
     if (err == 0) {
         DBG("suspend on/off successfully done");
     }
 
     nl_cb_put(cb);
+
+    return err;
 }
 
 static
@@ -216,7 +222,9 @@ suspend_set_wowlan(
     if (nl_send_auto(nl_socket, msg) < 0) {
         connman_error("Failed to send wowlan command.\n");
     } else {
-        suspend_plugin_netlink_handler();
+        if (suspend_plugin_netlink_handler() != 0) {
+            connman_error("%s: setting wowlan failed %d\n", __func__, err);
+        }
     }
 
     nlmsg_free(msg);
@@ -229,9 +237,10 @@ suspend_handle_display_on_off_iface(
     const char *ifname,
     int on_off)
 {
+    // first try the vendor specific TESTMODE command
     struct nl_msg *msg = NULL;
-
     int ifindex = 0;
+    struct testmode_cmd_suspend susp_cmd;
 
     ifindex = if_nametoindex(ifname);
 
@@ -246,7 +255,6 @@ suspend_handle_display_on_off_iface(
 
     genlmsg_put(msg, 0, 0, driver_id, 0, 0, NL80211_CMD_TESTMODE, 0);
 
-    struct testmode_cmd_suspend susp_cmd;
     memset(&susp_cmd, 0, sizeof susp_cmd);
     susp_cmd.header.idx = TESTMODE_CMD_ID_SUSPEND;
     susp_cmd.header.buflen = 0; // unused
@@ -262,10 +270,51 @@ suspend_handle_display_on_off_iface(
     if (nl_send_auto(nl_socket, msg) < 0) {
         connman_error("Failed to send testmode command.\n");
     } else {
-        suspend_plugin_netlink_handler();
+        if (suspend_plugin_netlink_handler() != 0) {
+            // the driver returned an error or doesn't support this command
+            // could be a driver which uses "SETSUSPENDMODE 1/0" priv cmds
+            connman_warn("%s: TESTMODE command failed."
+                "Ignore if the kernel is using a gen3 wmtWifi driver.\n",
+                __func__);
+        }
     }
 
     nlmsg_free(msg);
+
+    // also send SETSUSPENDMODE private commands for gen3 drivers:
+    int cmd_len = 0;
+    struct ifreq ifr;
+    android_wifi_priv_cmd priv_cmd;
+
+    int ret;
+    int ioctl_sock;
+
+    ioctl_sock = socket(PF_INET, SOCK_DGRAM, 0);
+
+    memset(&ifr, 0, sizeof(ifr));
+    memset(&priv_cmd, 0, sizeof(priv_cmd));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
+
+    cmd_len = snprintf(
+        priv_cmd.buf,
+        sizeof(priv_cmd.buf),
+        "SETSUSPENDMODE %d",
+        on_off);
+
+    priv_cmd.used_len = cmd_len + 1;
+    priv_cmd.total_len = PRIV_CMD_SIZE;
+    ifr.ifr_data = (void*)&priv_cmd;
+
+    ret = ioctl(ioctl_sock, SIOCDEVPRIVATE + 1, &ifr);
+
+    if (ret != 0) {
+        connman_warn("%s: SETSUSPENDMODE private command failed: %d,"
+            "ignore if the kernel is using a gen2 wmtWifi driver.",
+            __func__,
+            ret);
+    }
+
+    close(ioctl_sock);
 }
 
 static
@@ -381,7 +430,7 @@ suspend_plugin_exit()
     nl_socket = NULL;
 }
 
-CONNMAN_PLUGIN_DEFINE(suspend, "Suspend plugin for devices with wmtWifi gen2.",
+CONNMAN_PLUGIN_DEFINE(suspend, "Suspend plugin for devices with wmtWifi gen2/gen3.",
     CONNMAN_VERSION, CONNMAN_PLUGIN_PRIORITY_DEFAULT, suspend_plugin_init,
     suspend_plugin_exit)
 
