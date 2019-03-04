@@ -242,6 +242,8 @@ suspend_handle_display_on_off_iface(
     int ifindex = 0;
     struct testmode_cmd_suspend susp_cmd;
 
+    int success = 0;
+
     ifindex = if_nametoindex(ifname);
 
     if (ifindex == 0) {
@@ -276,6 +278,8 @@ suspend_handle_display_on_off_iface(
             connman_warn("%s: TESTMODE command failed."
                 "Ignore if the kernel is using a gen3 wmtWifi driver.\n",
                 __func__);
+        } else {
+            success = 1;
         }
     }
 
@@ -312,9 +316,16 @@ suspend_handle_display_on_off_iface(
             "ignore if the kernel is using a gen2 wmtWifi driver.",
             __func__,
             ret);
+    } else {
+        success = 1;
     }
 
     close(ioctl_sock);
+
+    if (!success) {
+        connman_error("%s: could not enter suspend mode, both methods failed",
+            __func__);
+    }
 }
 
 static
