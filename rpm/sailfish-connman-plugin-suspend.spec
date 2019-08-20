@@ -30,10 +30,10 @@ make %{_smp_mflags} KEEP_SYMBOLS=1 release
 rm -rf %{buildroot}
 mkdir -p %{buildroot}/%{plugin_dir}
 %make_install
-mkdir -p %{buildroot}/etc/udev/rules.d
-install -m 664 %{SOURCE1} %{buildroot}/etc/udev/rules.d/70-wifi-powersave.rules
+mkdir -p %{buildroot}/lib/udev/rules.d
+install -m 664 %{SOURCE1} %{buildroot}/lib/udev/rules.d/70-wifi-powersave.rules
 
 %files
 %defattr(-,root,root,-)
 %{plugin_dir}/*.so
-%{_sysconfdir}/udev/rules.d/70-wifi-powersave.rules
+/lib/udev/rules.d/70-wifi-powersave.rules
