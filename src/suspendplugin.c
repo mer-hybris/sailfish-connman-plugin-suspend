@@ -202,7 +202,11 @@ suspend_set_wowlan(
     ifindex = if_nametoindex(ifname);
 
     if (ifindex == 0) {
-        DBG("iface %s is not active/present (set_wowlan).", ifname);
+        if (!strcmp(ifname, "wlan0")) {
+            connman_error("iface %s is not active/present (set_wowlan).", ifname);
+        } else {
+            DBG("iface %s is not active/present (set_wowlan).", ifname);
+        }
         return -1;
     }
 
@@ -220,10 +224,10 @@ suspend_set_wowlan(
 
     nla_nest_end(msg, wowlan_triggers);
 
-    if (nl_send_auto(nl_socket, msg) < 0) {
+    if ((err = nl_send_auto(nl_socket, msg)) < 0) {
         connman_error("Failed to send wowlan command.\n");
     } else {
-        if (suspend_plugin_netlink_handler() != 0) {
+        if ((err = suspend_plugin_netlink_handler()) != 0) {
             connman_error("%s: setting wowlan failed %d\n", __func__, err);
         }
     }
@@ -418,6 +422,9 @@ suspend_plugin_init()
     genl_connect(nl_socket);
 
     driver_id = genl_ctrl_resolve(nl_socket, "nl80211");
+    if (driver_id < 0) {
+        connman_error("Finding indentifier for nl80211 failed: %d", driver_id);
+    }
 
     mce_display = mce_display_new();
     mce_display_event_ids[DISPLAY_EVENT_VALID] =
