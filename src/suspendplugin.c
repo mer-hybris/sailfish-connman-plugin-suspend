@@ -335,8 +335,6 @@ suspend_handle_display_on()
 {
     DBG("display ON");
 
-    // also enable wowlan for ap0 if it is present.
-    SET_WOWLAN(ap0);
     // we don't use p2p0 so it will never be visible but this doesn't hurt
     // either and maybe we need it at one point.
     SET_WOWLAN(p2p0);
@@ -346,7 +344,13 @@ suspend_handle_display_on()
     SET_WOWLAN(wlan0);
 
     if (access(WMTWIFI_DEVICE, F_OK) == 0) {
-        suspend_handle_display_on_off_iface("wlan0", 1);
+        // only suspend/unsuspend if we are not in ap mode
+        if ((if_nametoindex("ap0")) == 0) {
+            suspend_handle_display_on_off_iface("wlan0", 1);
+        } else {
+            // also enable wowlan for ap0 if it is present.
+            SET_WOWLAN(ap0);
+        }
     }
 }
 
@@ -356,8 +360,6 @@ suspend_handle_display_off()
 {
     DBG("display OFF");
 
-    // also enable wowlan for ap0 if it is present.
-    SET_WOWLAN(ap0);
     // we don't use p2p0 so it will never be visible but this doesn't hurt
     // either and maybe we need it at one point.
     SET_WOWLAN(p2p0);
@@ -367,7 +369,13 @@ suspend_handle_display_off()
     SET_WOWLAN(wlan0);
 
     if (access(WMTWIFI_DEVICE, F_OK) == 0) {
-        suspend_handle_display_on_off_iface("wlan0", 0);
+        // only suspend/unsuspend if we are not in ap mode
+        if ((if_nametoindex("ap0")) == 0) {
+            suspend_handle_display_on_off_iface("wlan0", 0);
+        } else {
+            // also enable wowlan for ap0 if it is present.
+            SET_WOWLAN(ap0);
+        }
     }
 }
 
