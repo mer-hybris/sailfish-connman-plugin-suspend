@@ -46,6 +46,7 @@
                                 } \
                             } while(false)
 
+#define WMTWIFI_DEVICE "/dev/wmtWifi"
 #define TESTMODE_CMD_ID_SUSPEND 101
 
 #define PRIV_CMD_SIZE 512
@@ -201,7 +202,11 @@ suspend_set_wowlan(
     ifindex = if_nametoindex(ifname);
 
     if (ifindex == 0) {
-        DBG("iface %s is not active/present (set_wowlan).", ifname);
+        if (!strcmp(ifname, "wlan0")) {
+            connman_error("iface %s is not active/present (set_wowlan).", ifname);
+        } else {
+            DBG("iface %s is not active/present (set_wowlan).", ifname);
+        }
         return -1;
     }
 
@@ -219,10 +224,10 @@ suspend_set_wowlan(
 
     nla_nest_end(msg, wowlan_triggers);
 
-    if (nl_send_auto(nl_socket, msg) < 0) {
+    if ((err = nl_send_auto(nl_socket, msg)) < 0) {
         connman_error("Failed to send wowlan command.\n");
     } else {
-        if (suspend_plugin_netlink_handler() != 0) {
+        if ((err = suspend_plugin_netlink_handler()) != 0) {
             connman_error("%s: setting wowlan failed %d\n", __func__, err);
         }
     }
@@ -334,8 +339,6 @@ suspend_handle_display_on()
 {
     DBG("display ON");
 
-    // also enable wowlan for ap0 if it is present.
-    SET_WOWLAN(ap0);
     // we don't use p2p0 so it will never be visible but this doesn't hurt
     // either and maybe we need it at one point.
     SET_WOWLAN(p2p0);
@@ -343,7 +346,16 @@ suspend_handle_display_on()
     // set wowlan since some kernels require it to be set in order to avoid
     // forced disconnect-on-suspend.
     SET_WOWLAN(wlan0);
-    suspend_handle_display_on_off_iface("wlan0", 1);
+
+    if (access(WMTWIFI_DEVICE, F_OK) == 0) {
+        // only suspend/unsuspend if we are not in ap mode
+        if ((if_nametoindex("ap0")) == 0) {
+            suspend_handle_display_on_off_iface("wlan0", 1);
+        } else {
+            // also enable wowlan for ap0 if it is present.
+            SET_WOWLAN(ap0);
+        }
+    }
 }
 
 static
@@ -352,8 +364,6 @@ suspend_handle_display_off()
 {
     DBG("display OFF");
 
-    // also enable wowlan for ap0 if it is present.
-    SET_WOWLAN(ap0);
     // we don't use p2p0 so it will never be visible but this doesn't hurt
     // either and maybe we need it at one point.
     SET_WOWLAN(p2p0);
@@ -361,7 +371,16 @@ suspend_handle_display_off()
     // set wowlan since some kernels require it to be set in order to avoid
     // forced disconnect-on-suspend.
     SET_WOWLAN(wlan0);
-    suspend_handle_display_on_off_iface("wlan0", 0);
+
+    if (access(WMTWIFI_DEVICE, F_OK) == 0) {
+        // only suspend/unsuspend if we are not in ap mode
+        if ((if_nametoindex("ap0")) == 0) {
+            suspend_handle_display_on_off_iface("wlan0", 0);
+        } else {
+            // also enable wowlan for ap0 if it is present.
+            SET_WOWLAN(ap0);
+        }
+    }
 }
 
 static
@@ -403,6 +422,9 @@ suspend_plugin_init()
     genl_connect(nl_socket);
 
     driver_id = genl_ctrl_resolve(nl_socket, "nl80211");
+    if (driver_id < 0) {
+        connman_error("Finding indentifier for nl80211 failed: %d", driver_id);
+    }
 
     mce_display = mce_display_new();
     mce_display_event_ids[DISPLAY_EVENT_VALID] =
@@ -441,7 +463,7 @@ suspend_plugin_exit()
     nl_socket = NULL;
 }
 
-CONNMAN_PLUGIN_DEFINE(suspend, "Suspend plugin for devices with wmtWifi gen2/gen3.",
+CONNMAN_PLUGIN_DEFINE(suspend, "Suspend plugin for devices with wowlan or wmtWifi gen2/gen3.",
     CONNMAN_VERSION, CONNMAN_PLUGIN_PRIORITY_DEFAULT, suspend_plugin_init,
     suspend_plugin_exit)
 
