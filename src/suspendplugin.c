@@ -228,7 +228,7 @@ suspend_set_wowlan(
         connman_error("Failed to send wowlan command.\n");
     } else {
         if ((err = suspend_plugin_netlink_handler()) != 0) {
-            connman_error("%s: setting wowlan failed %d\n", __func__, err);
+            connman_error("%s: setting wowlan failed for %s with error %d\n", __func__, ifname, err);
         }
     }
 
@@ -320,7 +320,7 @@ suspend_handle_display_on_off_iface(
         connman_warn("%s: SETSUSPENDMODE private command failed: %d,"
             "ignore if the kernel is using a gen2 wmtWifi driver.",
             __func__,
-            ret);
+            errno);
     } else {
         success = 1;
     }
