@@ -48,6 +48,8 @@
 
 #define WMTWIFI_DEVICE "/dev/wmtWifi"
 #define TESTMODE_CMD_ID_SUSPEND 101
+#define WMTWIFI_SUSPEND_VALUE   (1)
+#define WMTWIFI_RESUME_VALUE    (0)
 
 #define PRIV_CMD_SIZE 512
 typedef struct android_wifi_priv_cmd {
@@ -236,11 +238,17 @@ suspend_set_wowlan(
     return err;
 }
 
+/**
+ * @brief Suspend or resume wmtWifi device with gen2 or gen3 driver
+ * 
+ * @param ifname interface name (e.g. wlan0)
+ * @param suspend_value suspend value as uint8_t (usually 1 to suspend, 0 to resume)
+ */
 static
 void
-suspend_handle_display_on_off_iface(
+suspend_set_wmtwifi(
     const char *ifname,
-    int on_off)
+    uint8_t suspend_value)
 {
     // first try the vendor specific TESTMODE command
     struct nl_msg *msg = NULL;
@@ -256,7 +264,7 @@ suspend_handle_display_on_off_iface(
         return;
     }
 
-    DBG("iface: %s suspend: %d\n", ifname, (int)on_off ? 0 : 1);
+    DBG("iface: %s suspend value: %d\n", ifname, (int)suspend_value);
 
     msg = nlmsg_alloc();
 
@@ -265,7 +273,7 @@ suspend_handle_display_on_off_iface(
     memset(&susp_cmd, 0, sizeof susp_cmd);
     susp_cmd.header.idx = TESTMODE_CMD_ID_SUSPEND;
     susp_cmd.header.buflen = 0; // unused
-    susp_cmd.suspend = (int)(on_off) ? 0 : 1;
+    susp_cmd.suspend = suspend_value;
 
     nla_put_u32(msg, NL80211_ATTR_IFINDEX, ifindex);
     nla_put(
@@ -308,7 +316,7 @@ suspend_handle_display_on_off_iface(
         priv_cmd.buf,
         sizeof(priv_cmd.buf),
         "SETSUSPENDMODE %d",
-        on_off);
+        (int)suspend_value);
 
     priv_cmd.used_len = cmd_len + 1;
     priv_cmd.total_len = PRIV_CMD_SIZE;
@@ -350,7 +358,8 @@ suspend_handle_display_on()
     if (access(WMTWIFI_DEVICE, F_OK) == 0) {
         // only suspend/unsuspend if we are not in ap mode
         if ((if_nametoindex("ap0")) == 0) {
-            suspend_handle_display_on_off_iface("wlan0", 1);
+            //resume wmtwifi
+            suspend_set_wmtwifi("wlan0", WMTWIFI_RESUME_VALUE);
         } else {
             // also enable wowlan for ap0 if it is present.
             SET_WOWLAN(ap0);
@@ -375,7 +384,8 @@ suspend_handle_display_off()
     if (access(WMTWIFI_DEVICE, F_OK) == 0) {
         // only suspend/unsuspend if we are not in ap mode
         if ((if_nametoindex("ap0")) == 0) {
-            suspend_handle_display_on_off_iface("wlan0", 0);
+            //suspend wmtWifi
+            suspend_set_wmtwifi("wlan0", WMTWIFI_SUSPEND_VALUE);
         } else {
             // also enable wowlan for ap0 if it is present.
             SET_WOWLAN(ap0);
