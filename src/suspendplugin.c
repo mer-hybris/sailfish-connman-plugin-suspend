@@ -239,6 +239,61 @@ suspend_set_wowlan(
 }
 
 /**
+ * @brief Set powersave state (on/off), same as calling `iw dev %ifname% set power_save %is_enable%`
+ * 
+ * @param ifname interface name (e.g. wlan0)
+ * @param is_enable enable/disable state
+ */
+static
+void
+suspend_set_powersave(
+    const char *ifname, gboolean is_enable)
+{
+    int err = 0;
+    struct nl_msg *msg;
+
+    enum nl80211_ps_state ps_state;
+
+    int ifindex = 0;
+
+    ifindex = if_nametoindex(ifname);
+
+    if (ifindex == 0) {
+        if (!strcmp(ifname, "wlan0")) {
+            connman_error("iface %s is not active/present (set_powersave).", ifname);
+        } else {
+            DBG("iface %s is not active/present (set_powersave).", ifname);
+        }
+        return;
+    }
+
+    DBG("iface %s, setting powersave.", ifname);
+
+    msg = nlmsg_alloc();
+
+    genlmsg_put(msg, 0, 0, driver_id, 0, 0, NL80211_CMD_SET_POWER_SAVE, 0);
+
+    nla_put_u32(msg, NL80211_ATTR_IFINDEX, ifindex);
+
+    if (is_enable)
+        ps_state = NL80211_PS_ENABLED;
+    else
+        ps_state = NL80211_PS_DISABLED;
+
+    nla_put_u32(msg, NL80211_ATTR_PS_STATE, ps_state);
+
+    if ((err = nl_send_auto(nl_socket, msg)) < 0) {
+        connman_error("Failed to send powersave command.\n");
+    } else {
+        if ((err = suspend_plugin_netlink_handler()) != 0) {
+            connman_error("%s: setting powersave failed for %s with error %d\n", __func__, ifname, err);
+        }
+    }
+
+    nlmsg_free(msg);
+}
+
+/**
  * @brief Suspend or resume wmtWifi device with gen2 or gen3 driver
  * 
  * @param ifname interface name (e.g. wlan0)
@@ -384,6 +439,14 @@ suspend_handle_display_off()
     if (access(WMTWIFI_DEVICE, F_OK) == 0) {
         // only suspend/unsuspend if we are not in ap mode
         if ((if_nametoindex("ap0")) == 0) {
+            /*
+                wmtWifi (with gen3 driver at least) in Android requires to set power_save
+                to `off` and after that power_save to `on` to correctly suspend wmtWifi device.
+                We are doing that just before calling suspend_set_wmtwifi() after display is turned off.
+                This solution doesn't give us any disadvantages in comparison with Android behaviour.
+            */
+            suspend_set_powersave("wlan0", FALSE);
+            suspend_set_powersave("wlan0", TRUE);
             //suspend wmtWifi
             suspend_set_wmtwifi("wlan0", WMTWIFI_SUSPEND_VALUE);
         } else {
