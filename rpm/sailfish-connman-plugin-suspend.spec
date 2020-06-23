@@ -29,7 +29,7 @@ make %{_smp_mflags} KEEP_SYMBOLS=1 release
 %install
 rm -rf %{buildroot}
 mkdir -p %{buildroot}/%{plugin_dir}
-%make_install
+make DESTDIR=%{buildroot} LIBDIR=%{_libdir} install
 mkdir -p %{buildroot}/lib/udev/rules.d
 install -m 664 %{SOURCE1} %{buildroot}/lib/udev/rules.d/70-wifi-powersave.rules
 
