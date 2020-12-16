@@ -13,6 +13,7 @@ BuildRequires: pkgconfig(connman)
 BuildRequires: pkgconfig(libnl-3.0)
 BuildRequires: pkgconfig(libnl-genl-3.0)
 Provides: sailfish-connman-plugin-suspend-wmtwifi
+Obsoletes: sailfish-connman-plugin-suspend-wmtwifi
 
 %define plugin_dir %{_libdir}/connman/plugins
 
