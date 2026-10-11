@@ -58,6 +58,12 @@ typedef struct android_wifi_priv_cmd {
     int total_len;
 } android_wifi_priv_cmd;
 
+typedef struct wcnss_priv_cmd {
+    char *buf;
+    int used_len;
+    int total_len;
+} wcnss_priv_cmd;
+
 enum mce_display_events {
     DISPLAY_EVENT_VALID,
     DISPLAY_EVENT_STATE,
@@ -398,6 +404,35 @@ suspend_set_wmtwifi(
 
 static
 void
+suspend_set_wcnss(
+    const char *ifname,
+    int suspend_value)
+{
+    char buf[PRIV_CMD_SIZE];
+    struct ifreq ifr;
+    wcnss_priv_cmd priv_cmd;
+    int ioctl_sock;
+
+    memset(buf, 0, sizeof(buf));
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+
+    priv_cmd.buf = buf;
+    priv_cmd.used_len = snprintf(buf, sizeof(buf), "SETSUSPENDMODE %d", suspend_value) + 1;
+    priv_cmd.total_len = sizeof(buf);
+    ifr.ifr_data = (void*)&priv_cmd;
+
+    ioctl_sock = socket(PF_INET, SOCK_DGRAM, 0);
+
+    if (ioctl(ioctl_sock, SIOCDEVPRIVATE + 1, &ifr) != 0) {
+        connman_error("%s: SETSUSPENDMODE %d failed: %d", __func__, suspend_value, errno);
+    }
+
+    close(ioctl_sock);
+}
+
+static
+void
 suspend_handle_display_on()
 {
     DBG("display ON");
@@ -419,6 +454,8 @@ suspend_handle_display_on()
             // also enable wowlan for ap0 if it is present.
             SET_WOWLAN(ap0);
         }
+    } else if (access("/dev/wcnss_wlan", F_OK) == 0 && if_nametoindex("ap0") == 0) {
+        suspend_set_wcnss("wlan0", 0);
     }
 }
 
@@ -453,6 +490,8 @@ suspend_handle_display_off()
             // also enable wowlan for ap0 if it is present.
             SET_WOWLAN(ap0);
         }
+    } else if (access("/dev/wcnss_wlan", F_OK) == 0 && if_nametoindex("ap0") == 0) {
+        suspend_set_wcnss("wlan0", 1);
     }
 }
 
